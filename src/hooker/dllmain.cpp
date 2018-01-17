@@ -106,18 +106,22 @@ struct hostent *__stdcall cnconline_hook(const char *name)
 
 void Setup_Hooks()
 {
-    // Hook WinMain
-    Hook_Function(0x00401700, Main_Func);
-
+    // CnCOnline access hack.
     Hook_Function(0x007F5B06, cnconline_hook);
 
 	// Code that checks the launcher is running, launcher does CD check.
+    Hook_Function(0x004122F0, CopyProtect::isLauncherRunning);
+    Hook_Function(0x00412330, CopyProtect::notifyLauncher);
+    Hook_Function(0x004124B0, CopyProtect::shutdown);
     Hook_Function(0x00412420, CopyProtect::checkForMessage);
     Hook_Function(0x00412450, CopyProtect::validate);
 
     // Returns true for any CD checks
     Hook_Function(0x005F1CB0, IsFirstCDPresent);
-    
+#if 0
+    // Hook WinMain
+    Hook_Function(0x00401700, Main_Func);
+
     // Replace memory intialisation
     Hook_Function(0x00414510, Init_Memory_Manager);
     Hook_Function(0x004148C0, Init_Memory_Manager_Pre_Main);
@@ -182,6 +186,7 @@ void Setup_Hooks()
     ScriptList::Hook_Me();
     SidesInfo::Hook_Me();
     SidesList::Hook_Me();
+#endif
 }
 
 // Use DLLMain to Set up our hooks when the DLL loads. The launcher should stall
