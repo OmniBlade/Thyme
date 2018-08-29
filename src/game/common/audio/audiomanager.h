@@ -35,6 +35,7 @@
 
 #ifndef THYME_STANDALONE
 #include "hooker.h"
+#include <new>
 #endif
 
 enum AudioAffect
@@ -179,6 +180,15 @@ public:
     AudioSettings *Get_Audio_Settings() { return m_audioSettings; }
     MiscAudio *Get_Misc_Audio() { return m_miscAudio; }
 
+#ifndef THYME_STANDALONE
+    static void Hook_Me();
+    void Hook_Lose_Focus() { AudioManager::Lose_Focus(); }
+    void Hook_Regain_Focus() { AudioManager::Regain_Focus(); }
+    int Hook_Add_Audio_Event(const AudioEventRTS *event) { return AudioManager::Add_Audio_Event(event); }
+    void Hook_Remove_Audio_Event_Int(unsigned int event) { AudioManager::Remove_Audio_Event(event); }
+    void Hook_Remove_Audio_Event_Ascii(AsciiString event) { AudioManager::Remove_Audio_Event(event); }
+#endif
+
 protected:
     AudioSettings *m_audioSettings;
     MiscAudio *m_miscAudio;
@@ -213,6 +223,12 @@ private:
 };
 
 #ifndef THYME_STANDALONE
+
+inline void AudioManager::Hook_Me()
+{
+
+}
+
 extern AudioManager *&g_theAudio;
 #else
 extern AudioManager *g_theAudio;
