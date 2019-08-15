@@ -20,12 +20,12 @@
  */
 char *nstrdup(const char *str)
 {
-    char *nstr = NULL;
+    char *nstr = nullptr;
 
-    if (str != NULL) {
+    if (str != nullptr) {
         nstr = new char[strlen(str) + 1];
 
-        if (nstr != NULL) {
+        if (nstr != nullptr) {
             std::strcpy(nstr, str);
         }
     }
