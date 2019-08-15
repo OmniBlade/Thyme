@@ -14,6 +14,7 @@
  */
 #pragma once
 
+#include "always.h"
 #include "fileclass.h"
 
 class FileFactoryClass
