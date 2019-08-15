@@ -76,7 +76,7 @@ public:
 };
 
 /**
- * @brief Implements INI file handling, everything is handled in memory once loaded.
+ * Implements INI file handling, everything is handled in memory once loaded.
  *
  *    Here are example file contents:
  *
@@ -135,8 +135,9 @@ public:
     INIClass() : m_fileName(nullptr) { Initialize(); }
     INIClass(FileClass &file);
     virtual ~INIClass();
-    
+
     void Initialize();
+    void Shutdown();
     bool Clear(const char *section = nullptr, const char *entry = nullptr);
     bool Is_Loaded() const { return m_sectionList->First()->Is_Valid(); }
 
@@ -155,10 +156,12 @@ public:
     int Entry_Count(const char *section) const;
     const char *Get_Entry(const char *section, int index) const;
 
-    // Enumerate_Entries()
-    //   Enumerates all entries (key/value pairs) of a given section.
-    //   Returns the number of entries present or -1 upon error.
+    // Returns the number of entries present or -1 upon error.
     int Enumerate_Entries(const char *section, const char *entry_prefix, uint32_t start_number, uint32_t end_number);
+    bool Put_UUBlock(const char *section, void *block, int length);
+    int Get_UUBlock(const char *section, void *block, int length = 0) const;
+    bool Put_TextBlock(const char *section, const char *text);
+    int Get_TextBlock(const char *section, char *block, int length = 0) const;
     bool Put_Int(const char *section, const char *entry, int value, int format = INIINTEGER_AS_DECIMAL);
     int Get_Int(const char *section, const char *entry, int defvalue = 0) const;
     bool Put_Bool(const char *section, const char *entry, bool value);
@@ -182,4 +185,5 @@ protected:
     List<INISection *> *m_sectionList;
     IndexClass<int32_t, INISection *> *m_sectionIndex;
     const char *m_fileName;
+    static bool s_keepBlankEntries;
 };

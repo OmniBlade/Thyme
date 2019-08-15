@@ -14,27 +14,35 @@
  *            LICENSE
  */
 #include "iniclass.h"
+#include "b64pipe.h"
+#include "b64straw.h"
+#include "buffpipe.h"
+#include "buffstraw.h"
+#include "cachestraw.h"
 #include "filestraw.h"
+#include "nstrdup.h"
 #include "rawfileclass.h"
 #include "readline.h"
-#include "nstrdup.h"
 #include <cctype>
 #include <cstdio>
 
 using std::free;
+// using std::snprintf;
 using std::strchr;
 using std::strlen;
+
+bool INIClass::s_keepBlankEntries = false;
 
 INIEntry::~INIEntry()
 {
     if (m_key != nullptr) {
-        free((void*)m_key);
+        free(m_key);
     }
 
     m_key = nullptr;
 
     if (m_value != nullptr) {
-        free((void*)m_value);
+        free(m_value);
     }
 
     m_value = nullptr;
@@ -43,7 +51,7 @@ INIEntry::~INIEntry()
 void INIEntry::Set_Name(const char *new_name)
 {
     if (m_key != nullptr) {
-        free((void*)m_key);
+        free(m_key);
     }
 
     m_key = strdup(new_name);
@@ -52,7 +60,7 @@ void INIEntry::Set_Name(const char *new_name)
 void INIEntry::Set_Value(const char *str)
 {
     if (m_value != nullptr) {
-        free((void*)m_value);
+        free(m_value);
     }
 
     m_value = strdup(str);
@@ -61,7 +69,7 @@ void INIEntry::Set_Value(const char *str)
 INISection::~INISection()
 {
     if (m_sectionName != nullptr) {
-        free((void*)m_sectionName);
+        free(m_sectionName);
     }
 
     m_sectionName = nullptr;
@@ -83,7 +91,7 @@ INIEntry *INISection::Find_Entry(const char *entry) const
 void INISection::Set_Name(const char *str)
 {
     if (m_sectionName != nullptr) {
-        free((void*)m_sectionName);
+        free(m_sectionName);
     }
 
     m_sectionName = strdup(str);
@@ -98,6 +106,7 @@ INIClass::INIClass(FileClass &file) : m_fileName(nullptr)
 INIClass::~INIClass()
 {
     Clear();
+    Shutdown();
 }
 
 void INIClass::Initialize()
@@ -105,6 +114,12 @@ void INIClass::Initialize()
     m_sectionList = new List<INISection *>;
     m_sectionIndex = new IndexClass<int32_t, INISection *>;
     m_fileName = nstrdup("<unknown>");
+}
+
+void INIClass::Shutdown()
+{
+    delete m_sectionList;
+    delete m_sectionIndex;
 }
 
 bool INIClass::Clear(const char *section, const char *entry)
@@ -135,7 +150,7 @@ bool INIClass::Clear(const char *section, const char *entry)
 
         return false;
     }
-    
+
     m_sectionList->Delete();
     m_sectionIndex->Clear();
 
@@ -154,7 +169,6 @@ int INIClass::Load(FileClass &file)
 int INIClass::Load(Straw &straw)
 {
     char buffer[MAX_LINE_LENGTH];
-    //char section[64];
     bool merge = false;
     bool end_of_file = false;
 
@@ -162,9 +176,12 @@ int INIClass::Load(Straw &straw)
         merge = true;
     }
 
+    CacheStraw cstraw(MAX_BUF_SIZE);
+    cstraw.Get_From(&straw);
+
     // Read all lines until we find the first section.
     while (!end_of_file) {
-        Read_Line(straw, buffer, MAX_LINE_LENGTH, end_of_file);
+        Read_Line(cstraw, buffer, MAX_LINE_LENGTH, end_of_file);
         if (end_of_file) {
             DEBUG_LOG("INIClass::Load() - reached end of file before finding a section\n");
             return INIC_LOAD_INVALID;
@@ -175,79 +192,138 @@ int INIClass::Load(Straw &straw)
         }
     }
 
-    while (!end_of_file) {
-        DEBUG_ASSERT(buffer[0] == '[' && strchr(buffer, ']')); // at start of section
-        // Remove square brackets to get section name and create new section.
-        buffer[0] = ' ';
-        *strchr(buffer, ']') = '\0';
-        strtrim(buffer);
-        INISection *section = new INISection(buffer);
-
-        if (section == nullptr) {
-            DEBUG_LOG("INIClass::Load() - failed to create section!\n");
-
-            Clear();
-
-            return INIC_LOAD_INVALID;
-        }
-
+    if (merge) {
         while (!end_of_file) {
-            int count = Read_Line(straw, buffer, sizeof(buffer), end_of_file);
-            // Check we don't have another section.
-            if (buffer[0] == '[' && strchr(buffer, ']')) {
-                break;
+            char section[64];
+            DEBUG_ASSERT(buffer[0] == '[' && strchr(buffer, ']')); // at start of section
+            // Remove square brackets to get section name and create new section.
+            buffer[0] = ' ';
+            char *strchr_check = strchr(buffer, ']');
+
+            if (strchr_check != nullptr) {
+                *strchr_check = '\0';
             }
 
-            // Strip comments from the line.
-            Strip_Comments(buffer);
-            char *delimiter = strchr(buffer, '=');
+            strlcpy(section, buffer, sizeof(section));
 
-            if (count > 0 && buffer[0] != ';' && buffer[0] != '=') {
-                if (delimiter != nullptr) {
-                    delimiter[0] = '\0';
-                    char *entry = buffer;
-                    char *value = delimiter + 1;
+            while (!end_of_file) {
+                int count = Read_Line(cstraw, buffer, sizeof(buffer), end_of_file);
+                // Check we don't have another section.
+                if (buffer[0] == '[' && strchr(buffer, ']')) {
+                    break;
+                }
 
-                    strtrim(entry);
+                // Strip comments from the line.
+                Strip_Comments(buffer);
+                char *delimiter = strchr(buffer, '=');
 
-                    if (entry[0] != '\0') {
-                        strtrim(value);
+                if (count > 0 && buffer[0] != ';' && buffer[0] != '=') {
+                    if (delimiter != nullptr) {
+                        delimiter[0] = '\0';
+                        char *entry = buffer;
+                        char *value = delimiter + 1;
+                        strtrim(entry);
 
-                        if (value[0] == '\0') {
-                            continue;
+                        if (entry[0] != '\0') {
+                            strtrim(value);
+
+                            if (value[0] == '\0') {
+                                if (!s_keepBlankEntries) {
+                                    continue;
+                                }
+
+                                value[0] = ' ';
+                            }
+
+                            if (!Put_String(section, entry, value)) {
+                                return INIC_LOAD_INVALID;
+                            }
                         }
-
-                        INIEntry *entryptr = new INIEntry(entry, value);
-                        if (!entryptr) {
-                            DEBUG_LOG("Failed to create entry '%s = %s'.\n", entry, value);
-
-                            delete section;
-                            Clear();
-
-                            return INIC_LOAD_INVALID;
-                        }
-                        
-                        // Is this Name, Value or something?
-                        CRC(entryptr->Get_Name());
-                        int32_t crc = CRC(entryptr->Get_Name());
-
-                        if (section->m_entryIndex.Is_Present(crc)) {
-                            // Duplicate_CRC_Error(__FUNCTION__, section->Get_Name(), entryptr->Get_Name());
-                        }
-
-                        section->m_entryIndex.Add_Index(crc, entryptr);
-                        section->m_entryList.Add_Tail(entryptr);
                     }
                 }
             }
         }
+    } else {
+        while (!end_of_file) {
+            DEBUG_ASSERT(buffer[0] == '[' && strchr(buffer, ']')); // at start of section
+            // Remove square brackets to get section name and create new section.
+            buffer[0] = ' ';
+            char *strchr_check = strchr(buffer, ']');
 
-        if (section->m_entryList.Is_Empty()) {
-            delete section;
-        } else {
-            int32_t crc = CRC(section->Get_Name());
-            m_sectionIndex->Add_Index(crc, section);
-            m_sectionList->Add_Tail(section);
+            if (strchr_check != nullptr) {
+                *strchr_check = '\0';
+            }
+
+            strtrim(buffer);
+            INISection *section = new INISection(buffer);
+
+            if (section == nullptr) {
+                DEBUG_LOG("INIClass::Load() - failed to create section!\n");
+                Clear();
+
+                return INIC_LOAD_INVALID;
+            }
+
+            while (!end_of_file) {
+                int count = Read_Line(cstraw, buffer, sizeof(buffer), end_of_file);
+                // Check we don't have another section.
+                if (buffer[0] == '[' && strchr(buffer, ']')) {
+                    break;
+                }
+
+                // Strip comments from the line.
+                Strip_Comments(buffer);
+                char *delimiter = strchr(buffer, '=');
+
+                if (count > 0 && buffer[0] != ';' && buffer[0] != '=') {
+                    if (delimiter != nullptr) {
+                        delimiter[0] = '\0';
+                        char *entry = buffer;
+                        char *value = delimiter + 1;
+                        strtrim(entry);
+
+                        if (entry[0] != '\0') {
+                            strtrim(value);
+
+                            if (value[0] == '\0') {
+                                if (!s_keepBlankEntries) {
+                                    continue;
+                                }
+
+                                value[0] = ' ';
+                            }
+
+                            INIEntry *entryptr = new INIEntry(entry, value);
+                            if (!entryptr) {
+                                DEBUG_LOG("Failed to create entry '%s = %s'.\n", entry, value);
+                                delete section;
+                                Clear();
+
+                                return INIC_LOAD_INVALID;
+                            }
+
+                            // Is this Name, Value or something?
+                            CRC(entryptr->Get_Name());
+                            int32_t crc = CRC(entryptr->Get_Name());
+
+                            if (section->m_entryIndex.Is_Present(crc)) {
+                                // Duplicate_CRC_Error(__FUNCTION__, section->Get_Name(), entryptr->Get_Name());
+                            }
+
+                            section->m_entryIndex.Add_Index(crc, entryptr);
+                            section->m_entryList.Add_Tail(entryptr);
+                        }
+                    }
+                }
+            }
+
+            if (section->m_entryList.Is_Empty()) {
+                delete section;
+            } else {
+                int32_t crc = CRC(section->Get_Name());
+                m_sectionIndex->Add_Index(crc, section);
+                m_sectionList->Add_Tail(section);
+            }
         }
     }
 
@@ -338,6 +414,155 @@ int INIClass::Enumerate_Entries(const char *section, const char *entry_prefix, u
     }
 
     return i - start_number;
+}
+
+bool INIClass::Put_UUBlock(const char *section, void *block, int length)
+{
+    DEBUG_ASSERT(length > 0);
+    DEBUG_ASSERT(block != nullptr);
+
+    if (section != nullptr && block != nullptr && length > 0) {
+        Clear(section);
+
+        BufferStraw bstraw(block, length);
+        Base64Straw b64straw(STRAW_ENCODE);
+        b64straw.Get_From(&bstraw);
+
+        char block_buff[MAX_UUBLOCK_LINE_LENGTH];
+        char entry_buff[32];
+        int entry = 1;
+
+        while (true) {
+            // Once buffer straw has exhausted all bytes passed in, get will return 0.
+            int bytes = b64straw.Get(block_buff, sizeof(block_buff) - 2);
+            block_buff[bytes] = '\0';
+
+            if (bytes == 0) {
+                break;
+            }
+
+            snprintf(entry_buff, sizeof(entry_buff), "%d", entry++);
+            Put_String(section, entry_buff, block_buff);
+        }
+
+        return true;
+    }
+
+    return false;
+}
+
+int INIClass::Get_UUBlock(const char *section, void *block, int length) const
+{
+    DEBUG_ASSERT(length > 0);
+    DEBUG_ASSERT(block != nullptr);
+
+    int total = 0;
+    char buffer[128];
+
+    if (section != nullptr) {
+        Base64Pipe b64pipe(PIPE_DECODE);
+        BufferPipe bpipe(block, length);
+
+        b64pipe.Put_To(&bpipe);
+
+        int entry_count = Entry_Count(section);
+
+        if (entry_count > 0) {
+            for (int i = 0; i < entry_count; ++i) {
+                int strlen = Get_String(section, Get_Entry(section, i), "=", buffer, sizeof(buffer));
+                total += b64pipe.Put(buffer, strlen);
+            }
+        }
+
+        total += b64pipe.End();
+    }
+
+    return total;
+}
+
+bool INIClass::Put_TextBlock(const char *section, const char *text)
+{
+    DEBUG_ASSERT(text != nullptr);
+
+    char entry[32];
+    char buffer[MAX_TEXTBLOCK_LINE_LENGTH];
+
+    if (section != nullptr && text != nullptr) {
+        // Ensure we have a clear section to put our text block to.
+        Clear(section);
+
+        const char *block_ptr = text;
+
+        size_t block_len = 0;
+
+        // i is key for each line, starts at 1. Iterate over the text block in
+        // MAX_TEXTBLOCK_LINE_LENGTH sized chunks, turning them into ini entries.
+        for (int line = 1; *block_ptr != '\0'; block_ptr += block_len) {
+            strlcpy(buffer, block_ptr, sizeof(buffer));
+            snprintf(entry, sizeof(entry), "%d", line);
+
+            block_len = strlen(buffer);
+
+            if (block_len <= 0) {
+                break;
+            }
+
+            if (block_len >= sizeof(buffer)) {
+                while (!isspace(buffer[block_len])) {
+                    if (!--block_len) {
+                        return true;
+                    }
+                }
+
+                if (block_len <= 0) {
+                    break;
+                }
+
+                buffer[block_len] = '\0';
+            }
+
+            strtrim(buffer);
+            Put_String(section, entry, buffer);
+            ++line;
+        }
+
+        return true;
+    }
+
+    return false;
+}
+
+int INIClass::Get_TextBlock(const char *section, char *block, int length) const
+{
+    DEBUG_ASSERT(block != nullptr);
+    DEBUG_ASSERT(length != 0);
+
+    int total = 0;
+
+    if (section != nullptr && block != nullptr && length > 0) {
+        // If buffer has a length, we have at least a null string
+        block[0] = '\0';
+
+        int elen = Entry_Count(section);
+
+        // If buffer can fit at least one char as well, get a char.
+        for (int i = 0; i < elen && length > 1; ++i) {
+            if (i > 0) {
+                // Puts a space between lines
+                *block++ = ' ';
+                --length;
+                ++total;
+            }
+
+            Get_String(section, Get_Entry(section, i), "", block, length);
+
+            total = strlen(block);
+            length -= total;
+            block += total;
+        }
+    }
+
+    return total;
 }
 
 bool INIClass::Put_Int(const char *section, const char *entry, int value, int format)
@@ -535,7 +760,6 @@ int INIClass::Get_String(const char *section, const char *entry, const char *def
 
 bool INIClass::Put_Bool(const char *section, const char *entry, bool value)
 {
-
     if (value) {
         return Put_String(section, entry, "true");
     }
@@ -549,7 +773,8 @@ bool INIClass::Get_Bool(const char *section, const char *entry, bool defvalue) c
     const char *value;
 
     if (section != nullptr && entry != nullptr) {
-        if ((entryptr = Find_Entry(section, entry)) != nullptr && entryptr->Get_Name() && (value = entryptr->Get_Value()) != nullptr) {
+        if ((entryptr = Find_Entry(section, entry)) != nullptr && entryptr->Get_Name()
+            && (value = entryptr->Get_Value()) != nullptr) {
             switch (toupper(value[0])) {
                 // 1, true, yes...
                 case '1':
@@ -578,7 +803,7 @@ void INIClass::Strip_Comments(char *line)
     if (line != nullptr) {
         // fine first instance of ';'
         char *comment = strchr(line, ';');
-        
+
         // If we found a comment, replace the delimiter with a null char and trim.
         if (comment != nullptr) {
             *comment = '\0';
