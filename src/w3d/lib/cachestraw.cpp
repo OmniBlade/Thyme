@@ -15,6 +15,9 @@
  */
 #include "cachestraw.h"
 #include <algorithm>
+#include <cstring>
+
+using std::memmove;
 
 int CacheStraw::Get(void *source, int slen)
 {
